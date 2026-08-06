@@ -4,80 +4,112 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>eNSP 拓扑查看器 / 编辑器</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:ital,wght@0,400;0,500;0,600;0,700;1,400&family=Lora:ital,wght@0,400;0,500;0,600;1,400&family=Newsreader:ital,opsz,wght@0,18..72,300;0,18..72,400;0,18..72,500;1,18..72,400&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
+    <!-- SVG 图标符号定义（复用 Claude 图标风格） -->
+    <svg style="display:none">
+        <defs>
+            <symbol id="icon-new" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M8 12h8"/><path d="M12 8v8"/></symbol>
+            <symbol id="icon-open" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/></symbol>
+            <symbol id="icon-edit" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M13 21h8"/><path d="M21.174 6.812a1 1 0 0 0-3.986-3.987L3.842 16.174a2 2 0 0 0-.5.83l-1.321 4.352a.5.5 0 0 0 .623.622l4.353-1.32a2 2 0 0 0 .83-.497z"/></symbol>
+            <symbol id="icon-select" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4.1 12 6"/><path d="m5.1 8-2.9-.8"/><path d="m6 12-1.9 2"/><path d="M7.2 2.2 8 5.1"/><path d="M9.037 9.69a.498.498 0 0 1 .653-.653l11 4.5a.5.5 0 0 1-.074.949l-4.349 1.041a1 1 0 0 0-.74.739l-1.04 4.35a.5.5 0 0 1-.95.074z"/></symbol>
+            <symbol id="icon-line" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="5" r="2.5"/><circle cx="19" cy="19" r="2.5"/><path d="M7 7l10 10"/></symbol>
+            <symbol id="icon-zoom-in" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/><path d="M11 8v6"/><path d="M8 11h6"/></symbol>
+            <symbol id="icon-zoom-out" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/><path d="M8 11h6"/></symbol>
+            <symbol id="icon-fit" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></symbol>
+            <symbol id="icon-reset" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></symbol>
+            <symbol id="icon-plug" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v4a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/></symbol>
+            <symbol id="icon-undo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 5.5 5.5V21"/></symbol>
+            <symbol id="icon-redo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m15 14 5-5-5-5"/><path d="M20 9H9.5A5.5 5.5 0 0 0 4 14.5V21"/></symbol>
+            <symbol id="icon-theme-dark" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></symbol>
+            <symbol id="icon-theme-light" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></symbol>
+            <symbol id="icon-save" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15.2 3a2 2 0 0 1 1.4.6l3.8 3.8a2 2 0 0 1 .6 1.4V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/><path d="M17 21v-7a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v7"/><path d="M7 3v4a1 1 0 0 0 1 1h7"/></symbol>
+            <symbol id="icon-save-as" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"/><path d="M14 2v5a1 1 0 0 0 1 1h5"/><path d="M9 14h6"/><path d="M9 18h6"/></symbol>
+            <symbol id="icon-trash" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 11v6"/><path d="M14 11v6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></symbol>
+            <symbol id="icon-chevron" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></symbol>
+            <symbol id="icon-folder" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z"/></symbol>
+            <symbol id="icon-txt" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6V4h16v2"/><path d="M12 4v16"/><path d="M8 20h8"/></symbol>
+            <symbol id="icon-topo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="5" cy="6" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="12" cy="18" r="2"/><path d="M7 6h10"/><path d="M6.3 7.5 11 16.5"/><path d="M17.7 7.5 13 16.5"/></symbol>
+            <symbol id="icon-device" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M7 20h10"/><path d="M12 16v4"/></symbol>
+        </defs>
+    </svg>
     <div class="app-container">
         <!-- 顶部工具栏 -->
         <header class="toolbar">
             <div class="toolbar-left">
-                <h1 class="app-title">eNSP 拓扑编辑器 <span class="title-tag">查看 · 编辑</span></h1>
+                <div class="brand-mark" data-tip="eNSP 拓扑设备查看编辑器">
+                    <svg class="brand-icon"><use href="#icon-topo"/></svg>
+                    <span class="brand-text">拓扑设备查看编辑器</span>
+                </div>
             </div>
             <div class="toolbar-center">
-                <!-- 文件操作 -->
-                <button class="btn" id="btnOpen" title="打开拓扑文件">📂 打开</button>
-                <button class="btn" id="btnLoadExample" title="加载示例">✨ 示例</button>
-                <label class="btn btn-primary" id="btnImport">
-                    <input type="file" id="fileInput" accept=".topo" style="display:none;">
-                    导入
-                </label>
-
-                <!-- 编辑模式 -->
-                <span class="toolbar-divider"></span>
-                <button class="btn" id="btnEditMode" title="启用/关闭编辑模式">
-                    ✏️ 编辑: <span id="editModeState" class="mode-off">关</span>
-                </button>
-                <span class="tool-sub-group">
-                    <button class="btn tool-btn" id="btnToolSelect" title="工具：选择 / 移动">🖱 选择</button>
-                    <button class="btn tool-btn" id="btnToolLine" title="工具：绘制连线">↔ 连线</button>
-                </span>
+                <button class="btn icon-btn" id="btnNew" data-tip="新建空白拓扑"><svg class="btn-icon"><use href="#icon-new"/></svg></button>
+                <button class="btn icon-btn btn-primary" id="btnOpen" data-tip="打开拓扑文件"><svg class="btn-icon"><use href="#icon-open"/></svg></button>
+                <input type="file" id="fileInput" accept=".topo" style="display:none;">
 
                 <span class="toolbar-divider"></span>
-                <button class="btn" id="btnZoomIn" title="放大">🔍+</button>
-                <button class="btn" id="btnZoomOut" title="缩小">🔍-</button>
-                <button class="btn" id="btnFit" title="适应窗口">⛶ 适应</button>
-                <button class="btn" id="btnReset" title="重置视图">↺ 重置</button>
+                <button class="btn icon-btn" id="btnEditMode" data-tip="编辑模式：关"><svg class="btn-icon"><use href="#icon-edit"/></svg></button>
+                <button class="btn icon-btn tool-btn" id="btnToolSelect" data-tip="选择 / 移动"><svg class="btn-icon"><use href="#icon-select"/></svg></button>
+                <button class="btn icon-btn tool-btn" id="btnToolLine" data-tip="绘制连线"><svg class="btn-icon"><use href="#icon-line"/></svg></button>
+
                 <span class="toolbar-divider"></span>
-                <button class="btn" id="btnTogglePorts" title="显示/隐藏已使用的接口">🔌 显示接口</button>
-                <label class="font-size-ctl" title="同时设置所有注释的字号大小">
-                    <span>注释字号</span>
+                <button class="btn icon-btn" id="btnZoomIn" data-tip="放大"><svg class="btn-icon"><use href="#icon-zoom-in"/></svg></button>
+                <button class="btn icon-btn" id="btnZoomOut" data-tip="缩小"><svg class="btn-icon"><use href="#icon-zoom-out"/></svg></button>
+                <button class="btn icon-btn" id="btnFit" data-tip="适应窗口"><svg class="btn-icon"><use href="#icon-fit"/></svg></button>
+                <button class="btn icon-btn" id="btnReset" data-tip="重置视图"><svg class="btn-icon"><use href="#icon-reset"/></svg></button>
+
+                <span class="toolbar-divider"></span>
+                <button class="btn icon-btn" id="btnTogglePorts" data-tip="显示接口"><svg class="btn-icon"><use href="#icon-plug"/></svg></button>
+                <button class="btn icon-btn" id="btnAddTxt" data-tip="添加注释"><svg class="btn-icon"><use href="#icon-txt"/></svg></button>
+                <label class="font-size-ctl" data-tip="注释字号">
                     <input type="number" id="allTxtFontSize" min="4" max="60" step="1" value="8">
                 </label>
-                <button class="btn" id="btnUndo" title="撤回 (Ctrl+Z)">↩ 撤回</button>
-                <button class="btn" id="btnRedo" title="恢复 (Ctrl+Y)">↪ 恢复</button>
+                <button class="btn icon-btn" id="btnUndo" data-tip="撤回 (Ctrl+Z)"><svg class="btn-icon"><use href="#icon-undo"/></svg></button>
+                <button class="btn icon-btn" id="btnRedo" data-tip="恢复 (Ctrl+Y)"><svg class="btn-icon"><use href="#icon-redo"/></svg></button>
             </div>
             <div class="toolbar-right">
+                <button class="btn icon-btn" id="btnTheme" data-tip="深色模式"><svg class="btn-icon"><use href="#icon-theme-dark"/></svg></button>
                 <span class="toolbar-divider"></span>
-                <button class="btn btn-save" id="btnSave" title="保存到当前文件 (Ctrl+S)">💾 保存</button>
-                <button class="btn" id="btnSaveAs" title="另存为">📝 另存为</button>
-                <span id="zoomLevel" class="zoom-level">100%</span>
-                <span id="deviceCount" class="info-badge">设备: 0</span>
-                <span id="lineCount" class="info-badge">链路: 0</span>
+                <button class="btn icon-btn btn-save" id="btnSave" data-tip="保存 (Ctrl+S)"><svg class="btn-icon"><use href="#icon-save"/></svg></button>
+                <button class="btn icon-btn" id="btnSaveAs" data-tip="另存为"><svg class="btn-icon"><use href="#icon-save-as"/></svg></button>
+                <span class="status-pill" data-tip="缩放 · 设备 · 链路">
+                    <span id="zoomLevel">100%</span>
+                    <span class="pill-sep"></span>
+                    <svg class="pill-icon"><use href="#icon-device"/></svg><span id="deviceCount">0</span>
+                    <span class="pill-sep"></span>
+                    <svg class="pill-icon"><use href="#icon-line"/></svg><span id="lineCount">0</span>
+                </span>
             </div>
         </header>
+        <div class="toolbar-resizer" id="toolbarResizer" title="拖动调整工具栏高度"></div>
 
         <div class="main-content">
             <!-- 左侧：设备列表 & 添加设备 -->
             <aside class="sidebar left-sidebar">
                 <div class="sidebar-section palette-section" id="paletteSection">
-                    <h3>添加设备 <small>(需开启编辑)</small></h3>
+                    <h3 class="section-head"><svg class="chev-icon"><use href="#icon-chevron"/></svg>添加设备 <small>(需开启编辑)</small></h3>
                     <div id="palette" class="palette"></div>
                 </div>
                 <div class="sidebar-section device-list-section">
-                    <h3>设备列表</h3>
+                    <h3 class="section-head"><svg class="chev-icon"><use href="#icon-chevron"/></svg>设备列表</h3>
                     <div id="deviceList" class="device-list">
-                        <p class="empty-hint">请打开/导入拓扑文件</p>
+                        <p class="empty-hint">请打开拓扑文件</p>
                     </div>
                 </div>
             </aside>
+                <div class="sidebar-resizer" id="leftResizer" title="拖动调整左侧栏宽度"></div>
 
             <!-- 中间画布区域 -->
             <main class="canvas-container" id="canvasContainer">
                 <div class="drop-zone" id="dropZone">
                     <div class="drop-zone-content">
-                        <div class="drop-icon">📁</div>
+                        <div class="drop-icon"><svg class="drop-folder-icon"><use href="#icon-folder"/></svg></div>
                         <p>拖拽 .topo 文件到此处</p>
-                        <p class="drop-hint">或点击上方"打开 / 导入"按钮</p>
+                        <p class="drop-hint">或点击上方"打开"按钮</p>
                     </div>
                 </div>
                 <div class="canvas-hint" id="canvasHint" style="display:none;">
@@ -86,7 +118,7 @@
                 <svg id="topoSvg" class="topo-svg" style="display:none;">
                     <defs>
                         <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
-                            <polygon points="0 0, 10 3.5, 0 7" fill="#666"/>
+                            <polygon points="0 0, 10 3.5, 0 7" fill="#6e6d68"/>
                         </marker>
                         <filter id="deviceShadow" x="-30%" y="-30%" width="160%" height="160%">
                             <feDropShadow dx="2" dy="2" stdDeviation="3" flood-opacity="0.3"/>
@@ -98,8 +130,12 @@
                                 <feMergeNode in="SourceGraphic"/>
                             </feMerge>
                         </filter>
+                        <pattern id="gridPattern" width="20" height="20" patternUnits="userSpaceOnUse">
+                            <circle cx="0" cy="0" r="1.4" class="grid-dot"/>
+                        </pattern>
                     </defs>
                     <g id="topoGroup">
+                        <rect class="grid-bg" x="-10000" y="-10000" width="20000" height="20000" fill="url(#gridPattern)"/>
                         <g id="linesLayer"></g>
                         <g id="devicesLayer"></g>
                         <g id="labelsLayer"></g>
@@ -110,12 +146,15 @@
                     </g>
                 </svg>
             </main>
+                <div class="sidebar-resizer" id="rightResizer" title="拖动调整右侧栏宽度"></div>
 
             <!-- 右侧属性面板 -->
             <aside class="sidebar right-sidebar">
-                <h3>属性信息</h3>
-                <div id="propertyPanel" class="property-panel">
-                    <p class="empty-hint">选择设备或链路查看详情</p>
+                <div class="sidebar-section property-section-panel">
+                    <h3 class="section-head"><svg class="chev-icon"><use href="#icon-chevron"/></svg>属性信息</h3>
+                    <div id="propertyPanel" class="property-panel">
+                        <p class="empty-hint">选择设备或链路查看详情</p>
+                    </div>
                 </div>
             </aside>
         </div>
