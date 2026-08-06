@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>eNSP 拓扑查看器 / 编辑器</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- 顶部工具栏 -->
+        <header class="toolbar">
+            <div class="toolbar-left">
+                <h1 class="app-title">eNSP 拓扑编辑器 <span class="title-tag">查看 · 编辑</span></h1>
+            </div>
+            <div class="toolbar-center">
+                <!-- 文件操作 -->
+                <button class="btn" id="btnOpen" title="打开拓扑文件">📂 打开</button>
+                <button class="btn" id="btnLoadExample" title="加载示例">✨ 示例</button>
+                <label class="btn btn-primary" id="btnImport">
+                    <input type="file" id="fileInput" accept=".topo" style="display:none;">
+                    导入
+                </label>
+
+                <!-- 编辑模式 -->
+                <span class="toolbar-divider"></span>
+                <button class="btn" id="btnEditMode" title="启用/关闭编辑模式">
+                    ✏️ 编辑: <span id="editModeState" class="mode-off">关</span>
+                </button>
+                <span class="tool-sub-group">
+                    <button class="btn tool-btn" id="btnToolSelect" title="工具：选择 / 移动">🖱 选择</button>
+                    <button class="btn tool-btn" id="btnToolLine" title="工具：绘制连线">↔ 连线</button>
+                </span>
+
+                <span class="toolbar-divider"></span>
+                <button class="btn" id="btnZoomIn" title="放大">🔍+</button>
+                <button class="btn" id="btnZoomOut" title="缩小">🔍-</button>
+                <button class="btn" id="btnFit" title="适应窗口">⛶ 适应</button>
+                <button class="btn" id="btnReset" title="重置视图">↺ 重置</button>
+                <span class="toolbar-divider"></span>
+                <button class="btn" id="btnTogglePorts" title="显示/隐藏已使用的接口">🔌 显示接口</button>
+                <label class="font-size-ctl" title="同时设置所有注释的字号大小">
+                    <span>注释字号</span>
+                    <input type="number" id="allTxtFontSize" min="4" max="60" step="1" value="8">
+                </label>
+                <button class="btn" id="btnUndo" title="撤回 (Ctrl+Z)">↩ 撤回</button>
+                <button class="btn" id="btnRedo" title="恢复 (Ctrl+Y)">↪ 恢复</button>
+            </div>
+            <div class="toolbar-right">
+                <span class="toolbar-divider"></span>
+                <button class="btn btn-save" id="btnSave" title="保存到当前文件 (Ctrl+S)">💾 保存</button>
+                <button class="btn" id="btnSaveAs" title="另存为">📝 另存为</button>
+                <span id="zoomLevel" class="zoom-level">100%</span>
+                <span id="deviceCount" class="info-badge">设备: 0</span>
+                <span id="lineCount" class="info-badge">链路: 0</span>
+            </div>
+        </header>
+
+        <div class="main-content">
+            <!-- 左侧：设备列表 & 添加设备 -->
+            <aside class="sidebar left-sidebar">
+                <div class="sidebar-section palette-section" id="paletteSection">
+                    <h3>添加设备 <small>(需开启编辑)</small></h3>
+                    <div id="palette" class="palette"></div>
+                </div>
+                <div class="sidebar-section device-list-section">
+                    <h3>设备列表</h3>
+                    <div id="deviceList" class="device-list">
+                        <p class="empty-hint">请打开/导入拓扑文件</p>
+                    </div>
+                </div>
+            </aside>
+
+            <!-- 中间画布区域 -->
+            <main class="canvas-container" id="canvasContainer">
+                <div class="drop-zone" id="dropZone">
+                    <div class="drop-zone-content">
+                        <div class="drop-icon">📁</div>
+                        <p>拖拽 .topo 文件到此处</p>
+                        <p class="drop-hint">或点击上方"打开 / 导入"按钮</p>
+                    </div>
+                </div>
+                <div class="canvas-hint" id="canvasHint" style="display:none;">
+                    <span id="canvasHintText"></span>
+                </div>
+                <svg id="topoSvg" class="topo-svg" style="display:none;">
+                    <defs>
+                        <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                            <polygon points="0 0, 10 3.5, 0 7" fill="#666"/>
+                        </marker>
+                        <filter id="deviceShadow" x="-30%" y="-30%" width="160%" height="160%">
+                            <feDropShadow dx="2" dy="2" stdDeviation="3" flood-opacity="0.3"/>
+                        </filter>
+                        <filter id="glow">
+                            <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+                            <feMerge>
+                                <feMergeNode in="coloredBlur"/>
+                                <feMergeNode in="SourceGraphic"/>
+                            </feMerge>
+                        </filter>
+                    </defs>
+                    <g id="topoGroup">
+                        <g id="linesLayer"></g>
+                        <g id="devicesLayer"></g>
+                        <g id="labelsLayer"></g>
+                        <g id="portLayer"></g>
+                        <g id="portsLayer"></g>
+                        <!-- 预览图层：放置/移动时使用的临时图形 -->
+                        <g id="previewLayer"></g>
+                    </g>
+                </svg>
+            </main>
+
+            <!-- 右侧属性面板 -->
+            <aside class="sidebar right-sidebar">
+                <h3>属性信息</h3>
+                <div id="propertyPanel" class="property-panel">
+                    <p class="empty-hint">选择设备或链路查看详情</p>
+                </div>
+            </aside>
+        </div>
+
+        <!-- 状态栏 -->
+        <footer class="statusbar">
+            <span id="statusText">就绪</span>
+            <span id="fileName"></span>
+        </footer>
+    </div>
+
+        <!-- 连线参数对话框：选择线缆类型与两端接口 -->
+        <div class="modal-mask" id="linkModal" style="display:none;">
+            <div class="modal">
+                <h3>创建链路</h3>
+                <p class="modal-sub" id="linkModalDesc"></p>
+                <div class="modal-row">
+                    <label for="linkType">线缆类型</label>
+                    <select id="linkType"></select>
+                </div>
+                <div class="modal-row">
+                    <label id="linkSrcLabel">源接口</label>
+                    <select id="linkSrcSel"></select>
+                </div>
+                <div class="modal-row">
+                    <label id="linkDstLabel">目的接口</label>
+                    <select id="linkDstSel"></select>
+                </div>
+                <div class="modal-actions">
+                    <button type="button" class="btn btn-gray" id="linkCancel">取消 (Esc)</button>
+                    <button type="button" class="btn btn-primary" id="linkOk">创建</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- GBK 编码表（用于保存中文拓扑文件） -->
+        <script src="assets/gbk_table.js"></script>
+        <script src="app.js"></script>
+</body>
+</html>
