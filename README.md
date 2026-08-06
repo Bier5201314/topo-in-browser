@@ -1,5 +1,4 @@
-这个readme是deepseek写的，简单来说就是在index.html里快速打开topo文件，主要是ensp打开速度有点慢如果你要频繁打开topo文件可以用用看~
-# eNSP 拓扑查看器
+在index.html里快速打开topo文件，主要是ensp打开速度有点慢如果你要频繁打开topo文件可以用用看
 
 # eNSP 拓扑查看器
 
