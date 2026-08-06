@@ -1,3 +1,4 @@
+这个readme是deepseek写的，简单来说就是在index.html里快速打开topo文件，主要是ensp打开速度有点慢如果你要频繁打开topo文件可以用用看~
 # eNSP 拓扑查看器
 
 一个可以在浏览器中查看华为 eNSP (Enterprise Network Simulation Platform) 拓扑文件的网页工具。
@@ -20,18 +21,6 @@
 ### 方式一：直接打开（推荐）
 直接双击 `index.html` 文件，用浏览器打开即可使用。
 
-### 方式二：本地服务器
-如果遇到跨域问题，可以使用本地 HTTP 服务器：
-
-```bash
-# Python 3
-python -m http.server 8080
-
-# Node.js
-npx serve .
-```
-
-然后在浏览器访问 `http://localhost:8080`
 
 ## 操作说明
 
@@ -101,6 +90,3 @@ ensp-topo-viewer/
 2. 大尺寸拓扑文件可能加载较慢
 3. 部分特殊设备类型可能显示为默认图标
 
-## 许可证
-
-MIT License
