@@ -45,13 +45,33 @@ function xmlAttr(s) {
 let __ctx = null;
 function textWidthPx(str, fontSizePx) {
     if (!__ctx) __ctx = document.createElement('canvas').getContext('2d');
-    __ctx.font = fontSizePx + 'px Consolas, monospace';
+    __ctx.font = fontSizePx + "px 'Geist Mono', Consolas, monospace";
     return __ctx.measureText(String(str == null ? '' : str)).width;
 }
 
 function intToColor(n) {
     const u = Number(n) || 0;
     return '#' + [(u >>> 16) & 0xff, (u >>> 8) & 0xff, u & 0xff].map(v => v.toString(16).padStart(2, '0')).join('');
+}
+
+// 深色模式颜色调整：将过暗的颜色调亮以保证可读性
+// isBg=true 时对背景做更强的提亮，isBg=false 时对文字做适中提亮
+function adjustColorDark(hex, isBg) {
+    const s = String(hex || '#000000').replace('#', '');
+    let r = parseInt(s.substr(0, 2), 16) || 0;
+    let g = parseInt(s.substr(2, 2), 16) || 0;
+    let b = parseInt(s.substr(4, 2), 16) || 0;
+    const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+    const threshold = isBg ? 55 : 90;
+    if (lum * 255 < threshold) {
+        // 保持色相，仅整体提亮到可读，避免把用户所选的颜色抹成同一种灰
+        const target = isBg ? 118 : 178;
+        const k = Math.max(1, target / Math.max(1, lum * 255));
+        r = Math.min(255, Math.round(r * k));
+        g = Math.min(255, Math.round(g * k));
+        b = Math.min(255, Math.round(b * k));
+    }
+    return '#' + [r, g, b].map(v => v.toString(16).padStart(2, '0')).join('');
 }
 
 function colorToInt(hex) {
@@ -81,6 +101,12 @@ function lineNameOf(fam) {
     if (fam === 'serial') return 'Serial';
     if (fam === 'wlan') return 'Wlan';
     return 'Copper';
+}
+
+// eNSP 端口命名约定：路由器/防火墙/NE/CX 从 0 开始（如 GE0/0/0），
+// 交换机/终端/其他设备（S3/C6/WLAN/PC…）从 1 开始（如 GE0/0/1）。
+function ifaceStartNumber(model) {
+    return /^(AR|NE|USG|CX|FW)/i.test(String(model || '')) ? 0 : 1;
 }
 
 // 新增设备模板：接口列表 [ [接口类型, 数量], ... ]
@@ -150,26 +176,38 @@ const DEVICE_CATALOG = [
     { cat: 'FW',     label: '防火墙',   models: ['USG5500', 'USG6000V'] },
     { cat: 'CLIENT', label: '终端',     models: ['PC', 'MCS', 'Client', 'Server', 'STA', 'Cellphone'] },
     { cat: 'Other Devices', label: '其它设备', models: ['Cloud', 'FRSW', 'HUB'] },
-    { cat: 'Custom Device Type', label: '自定义设备类型', models: [] },
     { cat: 'NET',    label: '设备连线', cables: ['Auto', 'Copper', 'Serial', 'POS', 'E1', 'ATM', 'CTL'] }
 ];
 
 // 设备连线=eNSP 的连线工具。线名与 eNSP 完全一致（Auto/Copper/Serial/POS/E1/ATM/CTL），
 // 来源 eNSP_Client.exe 图标资源表 + 用户实际看到的 eNSP 界面命名。写入 topo 可直接被 eNSP 读取。
 const CABLE_TYPES = {
-    'Auto':   { label: 'Auto',   fam: null,     color: '#7a8b9a' },
-    'Copper': { label: 'Copper', fam: 'net',    color: '#c0392b' },
-    'Serial': { label: 'Serial', fam: 'serial', color: '#2980b9' },
-    'POS':    { label: 'POS',    fam: 'serial', color: '#e67e22' },
-    'E1':     { label: 'E1',     fam: 'serial', color: '#16a085' },
-    'ATM':    { label: 'ATM',    fam: 'net',    color: '#8e44ad' },
-    'CTL':    { label: 'CTL',    fam: 'net',    color: '#34495e' }
+    'Auto':   { label: 'Auto',   fam: null,     color: '#9b988c' },
+    'Copper': { label: 'Copper', fam: 'net',    color: '#b83636' },
+    'Serial': { label: 'Serial', fam: 'serial', color: '#934828' },
+    'POS':    { label: 'POS',    fam: 'serial', color: '#d6866a' },
+    'E1':     { label: 'E1',     fam: 'serial', color: '#788c5d' },
+    'ATM':    { label: 'ATM',    fam: 'net',    color: '#9c87f5' },
+    'CTL':    { label: 'CTL',    fam: 'net',    color: '#46443b' }
 };
 
 function lineColorOf(ln) {
     if (ln && CABLE_TYPES[ln]) return CABLE_TYPES[ln].color;
-    return '#7a8b9a';
+    return '#9b988c';
 }
+
+// 添加设备面板顶部的“常用”分类（在设备分类之前渲染）
+const COMMON_ITEMS = {
+    label: '常用',
+    items: [
+        { model: 'AR2220' },
+        { model: 'S5700' },
+        { model: 'S3700' },
+        { model: 'PC' },
+        { cable: 'Copper' },
+        { model: 'Server' }
+    ]
+};
 
 class ENSPTopoViewer {
     constructor() {
@@ -194,20 +232,23 @@ class ENSPTopoViewer {
         this.lineCountEl    = document.getElementById('lineCount');
         this.canvasHint     = document.getElementById('canvasHint');
         this.canvasHintText = document.getElementById('canvasHintText');
-        this.editModeState  = document.getElementById('editModeState');
 
         this.devices = new Map();
         this.lines = [];
         this.txttips = [];
+        this.pendingTxt = false;
         this.shapesRaw = '';
         this.topoVersion = '';
         this.fileNameStr = '';
+        this.dirty = false;
+        this._savedSnap = null;
 
         this.scale = 1;
         this.translateX = 0;
         this.translateY = 0;
 
         this.editMode = false;
+        this._topologyStarted = false;
         this.activeTool = 'select';
         this.selectedType = null;
         this.selectedId = null;
@@ -227,6 +268,7 @@ class ENSPTopoViewer {
 
         this._nameCounts = {};
         this.fsHandle = null;
+        this.paletteCollapsed = {};
 
         this.init();
     }
@@ -235,29 +277,63 @@ class ENSPTopoViewer {
         this.bindEvents();
         this.renderPalette();
         this.updateView();
+        const saved = localStorage.getItem('ensp-viewer-theme');
+        this.setTheme(saved === 'dark');
+        const th = localStorage.getItem('ensp-viewer-toolbar-height');
+        if (th) { const t = document.querySelector('.toolbar'); t.style.height = th + 'px'; t.style.overflowY = 'hidden'; }
+        const lw = localStorage.getItem('ensp-viewer-left-width');
+        if (lw) document.querySelector('.left-sidebar').style.width = lw + 'px';
+        const rw = localStorage.getItem('ensp-viewer-right-width');
+        if (rw) document.querySelector('.right-sidebar').style.width = rw + 'px';
+    }
+
+    // ---------------- 深色 / 浅色主题 ----------------
+    setTheme(dark) {
+        document.documentElement.setAttribute('data-theme', dark ? 'dark' : 'light');
+        const btn = document.getElementById('btnTheme');
+        if (btn) btn.innerHTML = dark
+            ? '<svg class="btn-icon"><use href="#icon-theme-light"/></svg>浅色'
+            : '<svg class="btn-icon"><use href="#icon-theme-dark"/></svg>深色';
+        localStorage.setItem('ensp-viewer-theme', dark ? 'dark' : 'light');
+    }
+
+    toggleTheme() {
+        this.setTheme(document.documentElement.getAttribute('data-theme') !== 'dark');
     }
 
     // ---------------- 事件绑定 ----------------
     bindEvents() {
+        document.getElementById('btnNew').addEventListener('click', () => this.newTopo());
         document.getElementById('btnOpen').addEventListener('click', () => this.openSystemFile());
-        document.getElementById('btnImport').addEventListener('click', () => this.fileInput.click());
         this.fileInput.addEventListener('change', (e) => {
             const f = e.target.files[0];
             if (f) this.loadFile(f);
             e.target.value = '';
         });
 
-        this.dropZone.addEventListener('dragover', (e) => { e.preventDefault(); this.dropZone.classList.add('dragover'); });
-        this.dropZone.addEventListener('dragleave', () => this.dropZone.classList.remove('dragover'));
-        this.dropZone.addEventListener('drop', (e) => {
+        // 添加设备 / 设备列表 面板的收起-展开
+        document.querySelectorAll('.section-head').forEach(h => {
+            h.addEventListener('click', () => {
+                const sec = h.closest('.sidebar-section');
+                if (sec) sec.classList.toggle('collapsed');
+            });
+        });
+
+        // 拖拽 .topo 打开：绑定到整个画布容器（dropZone 为纯视觉提示，本身不接收指针事件）
+        const handleDragOver = (e) => { e.preventDefault(); this.dropZone.classList.add('dragover'); };
+        const handleDragLeave = (e) => {
+            if (!this.canvasContainer.contains(e.relatedTarget)) this.dropZone.classList.remove('dragover');
+        };
+        const handleDrop = (e) => {
             e.preventDefault();
             this.dropZone.classList.remove('dragover');
             const f = e.dataTransfer.files[0];
             if (f && f.name.toLowerCase().endsWith('.topo')) this.loadFile(f);
             else this.setStatus('请拖入 .topo 格式的文件', 'error');
-        });
-
-        document.getElementById('btnLoadExample').addEventListener('click', () => this.loadExample());
+        };
+        this.canvasContainer.addEventListener('dragover', handleDragOver);
+        this.canvasContainer.addEventListener('dragleave', handleDragLeave);
+        this.canvasContainer.addEventListener('drop', handleDrop);
 
         document.getElementById('btnEditMode').addEventListener('click', () => this.toggleEditMode());
         document.getElementById('btnToolSelect').addEventListener('click', () => this.setTool('select'));
@@ -272,8 +348,10 @@ class ENSPTopoViewer {
         document.getElementById('btnSaveAs').addEventListener('click', () => this.save(true));
 
         document.getElementById('btnTogglePorts').addEventListener('click', () => this.toggleShowPorts());
+        document.getElementById('btnAddTxt').addEventListener('click', () => this.beginTxt());
         document.getElementById('btnUndo').addEventListener('click', () => this.undo());
         document.getElementById('btnRedo').addEventListener('click', () => this.redo());
+        document.getElementById('btnTheme').addEventListener('click', () => this.toggleTheme());
 
         const allFs = document.getElementById('allTxtFontSize');
         if (allFs) allFs.addEventListener('change', () => this.setAllTxtFontSize(parseFloat(allFs.value)));
@@ -319,6 +397,61 @@ class ENSPTopoViewer {
         document.getElementById('linkModal').addEventListener('mousedown', (e) => {
             if (e.target.id === 'linkModal') { this.closeLinkModal(); this.cancelLine(); }
         });
+
+        // 右键：取消粘性放置/已选连线，恢复拖拽模式；无放置状态时取消当前选中
+        this.svg.addEventListener('contextmenu', (e) => {
+            e.preventDefault();
+            if (this.pendingAddId || this.pendingTxt || this.pendingCable || this.lineSourceId) {
+                this.cancelAll();
+                this.svg.style.cursor = 'grab';
+                this.setStatus('已取消，恢复拖拽模式');
+            } else {
+                this.deselectAll();
+            }
+        });
+
+        // 工具栏高度：拖动底部手柄自由调节（可完全隐藏）
+        const resizer = document.getElementById('toolbarResizer');
+        const toolbar = document.querySelector('.toolbar');
+        resizer.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            const startY = e.clientY;
+            const startH = toolbar.offsetHeight;
+            const move = (ev) => {
+                const h = Math.max(0, Math.min(280, startH + (ev.clientY - startY)));
+                toolbar.style.height = h + 'px';
+                toolbar.style.overflowY = 'hidden';
+                localStorage.setItem('ensp-viewer-toolbar-height', String(h));
+            };
+            const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); resizer.classList.remove('active'); };
+            resizer.classList.add('active');
+            document.addEventListener('mousemove', move);
+            document.addEventListener('mouseup', up);
+        });
+
+        // 左右侧栏：拖动分隔条调整宽度（可完全隐藏）
+        const bindSideResize = (resId, sidebarSel, key, dir) => {
+            const rs = document.getElementById(resId);
+            const sb = document.querySelector(sidebarSel);
+            rs.addEventListener('mousedown', (e) => {
+                e.preventDefault();
+                const startX = e.clientX;
+                const startW = sb.offsetWidth;
+                const move = (ev) => {
+                    const dx = ev.clientX - startX;
+                    let w = dir === 'left' ? startW - dx : startW + dx;
+                    w = Math.max(0, Math.min(420, w));
+                    sb.style.width = w + 'px';
+                    localStorage.setItem(key, String(w));
+                };
+                const up = () => { document.removeEventListener('mousemove', move); document.removeEventListener('mouseup', up); rs.classList.remove('active'); };
+                rs.classList.add('active');
+                document.addEventListener('mousemove', move);
+                document.addEventListener('mouseup', up);
+            });
+        };
+        bindSideResize('leftResizer', '.left-sidebar', 'ensp-viewer-left-width', 'right');
+        bindSideResize('rightResizer', '.right-sidebar', 'ensp-viewer-right-width', 'left');
     }
 
     linkModalOpen() {
@@ -360,9 +493,9 @@ class ENSPTopoViewer {
     }
 
     updateModeBar() {
-        this.editModeState.textContent = this.editMode ? '开' : '关';
-        this.editModeState.className = this.editMode ? 'mode-on' : 'mode-off';
-        document.getElementById('btnEditMode').classList.toggle('active', this.editMode);
+        const btnEdit = document.getElementById('btnEditMode');
+        btnEdit.classList.toggle('active', this.editMode);
+        btnEdit.setAttribute('data-tip', this.editMode ? '编辑模式：开' : '编辑模式：关');
         document.querySelectorAll('.tool-btn').forEach(b => b.classList.toggle('is-disabled', !this.editMode));
         this.setToolButtonClasses();
     }
@@ -384,7 +517,7 @@ class ENSPTopoViewer {
 
     setStatus(txt, type) {
         this.statusText.textContent = txt;
-        this.statusText.style.color = type === 'error' ? '#e74c3c' : '#888';
+        this.statusText.style.color = type === 'error' ? '#d64545' : '#6e6d68';
     }
 
     // ---------------- 文件 ----------------
@@ -410,11 +543,13 @@ class ENSPTopoViewer {
                 try { text = new TextDecoder('gbk').decode(ab); }
                 catch (x) { text = new TextDecoder('utf-8').decode(ab); }
                 this.parseTopo(text);
+                this.markClean();
                 this.render();
                 this.fitToView();
                 this.fileNameEl.textContent = file.name;
                 this.dropZone.style.display = 'none';
                 this.svg.style.display = 'block';
+                this._topologyStarted = true;
                 this.setStatus('已加载: ' + file.name);
             } catch (err) {
                 console.error(err);
@@ -425,73 +560,30 @@ class ENSPTopoViewer {
         reader.readAsArrayBuffer(file);
     }
 
-    loadExample() {
-        try {
-            this.parseTopo(this.exampleXml());
-            this.render();
-            this.fitToView();
-            this.fileNameStr = 'RIP示例.topo';
-            this.fileNameEl.textContent = 'RIP示例.topo (示例)';
-            this.dropZone.style.display = 'none';
-            this.svg.style.display = 'block';
-            this.setStatus('已加载示例拓扑');
-        } catch (err) { this.setStatus('示例加载失败: ' + err.message, 'error'); }
-    }
-
-    exampleXml() {
-        return `<?xml version="1.0" encoding="UNICODE" ?>
-<topo version="1.2.00.390">
-    <devices>
-        <dev id="4CA76BCE-449E-4dc0-B3E3-E86C85B97033" name="CLOUD1" poe="0" model="Cloud" settings="" system_mac="" com_port="0" bootmode="0" cx="367.5" cy="327.5" edit_left="410" edit_top="412">
-            <slot number="slot17" isMainBoard="1">
-                <interface sztype="Ethernet" interfacename="Ethernet" count="3" />
-                <interface sztype="Ethernet" interfacename="GE" count="0" />
-                <interface sztype="Serial" interfacename="Serial" count="0" />
-            </slot>
-        </dev>
-        <dev id="8EC6BBB2-BB78-4885-91C-BDF8F4E0554C" name="AR2" poe="0" model="AR1220" settings="" system_mac="00-E0-FC-5D-01-FD" com_port="2001" bootmode="0" cx="189" cy="463" edit_left="216" edit_top="517">
-            <slot number="slot17" isMainBoard="1">
-                <interface sztype="Ethernet" interfacename="GE" count="2" />
-                <interface sztype="Ethernet" interfacename="Ethernet" count="8" />
-                <interface sztype="Serial" interfacename="Serial" count="2" />
-            </slot>
-        </dev>
-        <dev id="83E28F2A-7D21-4a8a-B7B4-9F668A485" name="AR4" poe="0" model="AR1220" settings="" system_mac="00-E0-FC-5A-17-F8" com_port="2003" bootmode="0" cx="651" cy="136" edit_left="678" edit_top="190">
-            <slot number="slot17" isMainBoard="1">
-                <interface sztype="Ethernet" interfacename="GE" count="2" />
-                <interface sztype="Ethernet" interfacename="Ethernet" count="8" />
-                <interface sztype="Serial" interfacename="Serial" count="2" />
-            </slot>
-        </dev>
-        <dev id="BD156A08-9D01-4881-A1C4-C3-4C-3D" name="AR1" poe="0" model="AR1220" system_mac="00-E0-FC-C3-4C-3D" com_port="2000" bootmode="0" cx="383" cy="137" edit_left="409" edit_top="114">
-            <slot number="slot1" isMainBoard="1">
-                <interface sztype="Ethernet" interfacename="GE" count="2" />
-                <interface sztype="Ethernet" interfacename="Ethernet" count="8" />
-                <interface sztype="Ethernet" interfacename="GE" count="1" />
-                <interface sztype="Serial" interfacename="Serial" count="2" />
-            </slot>
-        </dev>
-        <dev id="2ED90F1C-D24-4eBb-A06-369FF8D3F1" name="AR3" poe="0" model="AR1220" com_port="2002" bootmode="0" cx="642" cy="468" edit_left="669" edit_top="522">
-            <slot number="slot1" isMainBoard="1">
-                <interface sztype="Ethernet" interfacename="GE" count="2" />
-                <interface sztype="Ethernet" interfacename="Ethernet" count="8" />
-                <interface sztype="Ethernet" interfacename="GE" count="1" />
-            </slot>
-        </dev>
-    </devices>
-    <lines>
-        <line srcDeviceID="BD156A08-9D01-4881-A1C4-C3-4C-3D" destDeviceID="83E28F2A-7D21-4a8a-B7B4-9F668A485">
-            <interfacePair lineName="Serial" srcIndex="11" srcBoundRectIsMoved="0" srcBoundRect_X="453" srcBoundRect_Y="163" srcOffset_X="0" srcOffset_Y="0" tarIndex="10" tarBoundRectIsMoved="1" tarBoundRect_X="634" tarBoundRect_Y="163" tarOffset_X="0" tarOffset_Y="0" />
-        </line>
-        <line srcDeviceID="8EC6BBB2-BB78-4885-91C-BDF8F4E0554C" destDeviceID="2ED90F1C-D24-4eBb-A06-369FF8D3F1">
-            <interfacePair lineName="Copper" srcIndex="0" srcBoundRectIsMoved="0" srcBoundRect_X="0" srcBoundRect_Y="0" srcOffset_X="0" srcOffset_Y="0" tarIndex="1" tarBoundRectIsMoved="0" tarBoundRect_X="0" tarBoundRect_Y="0" tarOffset_X="0" tarOffset_Y="0" />
-        </line>
-    </lines>
-    <shapes />
-    <txttips>
-        <txttip left="140" top="107" right="303" bottom="124" content="loopback0:10.0.1.1/24&#x0D;&#x0A;RIPv2 示例" fontname="Consolas" fontstyle="0" editsize="100" txtcolor="-16777216" txtbkcolor="-7278960" charset="1" />
-    </txttips>
-</topo>`;
+    // 新建空白拓扑（与 eNSP 新建工程一致：清空后直接进入编辑模式）
+    newTopo() {
+        if ((this.devices.size || this.lines.length) && !window.confirm('新建将清空当前拓扑，是否继续？')) return;
+        this._topologyStarted = true;
+        this.devices.clear();
+        this.lines = [];
+        this.txttips = [];
+        this.shapesRaw = '';
+        this.topoVersion = '1.2.00.390';
+        this.fileNameStr = '';
+        this.fileNameEl.textContent = '';
+        this.fsHandle = null;
+        this.undoStack = [];
+        this.redoStack = [];
+        this.showAllPorts = false;
+        this.pendingCable = null;
+        this.cancelAll();
+        this.dropZone.style.display = 'none';
+        this.svg.style.display = 'block';
+        this.render();
+        this.markClean();
+        this.enableEdit();
+        this.fitToView();
+        this.setStatus('已新建空白拓扑（编辑模式已开启）');
     }
 
     // ---------------- 解析 ----------------
@@ -518,6 +610,13 @@ class ENSPTopoViewer {
                 slotEl.querySelectorAll(':scope > interface').forEach(ifEl => {
                     slot.interfaces.push({ sztype: ifEl.getAttribute('sztype') || '', interfacename: ifEl.getAttribute('interfacename') || '', count: parseInt(ifEl.getAttribute('count')) || 0 });
                 });
+                const extras = [];
+                slotEl.querySelectorAll(':scope > interfaceMap').forEach(mEl => {
+                    const m = {};
+                    for (let i = 0; i < mEl.attributes.length; i++) m[mEl.attributes[i].name] = mEl.attributes[i].value;
+                    extras.push(m);
+                });
+                slot.extras = extras;
                 dev.slots.push(slot);
             });
             dev.ifaces = this.expandIfaces(dev);
@@ -553,10 +652,11 @@ class ENSPTopoViewer {
     }
 
     // 展开设备插槽中的接口，得到有序接口数组（用于端口编号/连线）。
-    // 命名与 eNSP 一致：同一接口类型在同一插槽内连续编号（多为 GE0/0/1、GE0/0/2…），
-    // 相同接口类型的多个 <interface> 块续接编号，不重复。主板上接口从 /0/0/1 开始。
+    // 命名与 eNSP 一致：同一接口类型在同一插槽内连续编号，相同接口类型的
+    // 多个 <interface> 块续接编号。路由器/防火墙从 GE0/0/0 开始，其余设备从 GE0/0/1 开始。
     expandIfaces(dev) {
         const list = [];
+        const startN = ifaceStartNumber(dev.model);
         dev.slots.forEach(slot => {
             const slotNo = (slot.attrs.isMainBoard === '1' || slot.attrs.number === 'slot17') ? '0' : (slot.attrs.id || '0');
             const counters = {};
@@ -564,8 +664,9 @@ class ENSPTopoViewer {
                 const base = iface.interfacename || 'GE';
                 const count = iface.count || 0;
                 for (let i = 0; i < count; i++) {
-                    const nth = (counters[base] || 0) + 1;
-                    counters[base] = nth;
+                    let nth;
+                    if (counters[base] === undefined) nth = counters[base] = startN;
+                    else nth = ++counters[base];
                     list.push({ name: base + slotNo + '/0/' + nth, base, family: familyOf(base), index: list.length });
                 }
             });
@@ -597,6 +698,7 @@ class ENSPTopoViewer {
         this.setToolButtonClasses();
         this.applySelection();
         this.refreshPanel();
+        this.updateDirty();
     }
 
     renderDevices() {
@@ -738,16 +840,22 @@ class ENSPTopoViewer {
 
     renderTxttips() {
         this.labelsLayer.innerHTML = '';
+        const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
         this.txttips.forEach((tip, i) => {
             this.layoutTxt(tip);
             const pad = 3;
             const fs = tip._fs, lineH = tip._lineH;
             const w = (tip.right - tip.left) || 60, h = (tip.bottom - tip.top) || 16;
             const g = mkEl('g', { 'class': 'txttip-group' + (this.editMode ? ' editable' : ''), 'data-idx': i });
-            const fg = intToColor(tip.txtcolor != null ? tip.txtcolor : -16777216);
-            const bg = intToColor(tip.txtbkcolor != null ? tip.txtbkcolor : -2331);
-            mkEl('rect', { 'class': 'txttip-bg', x: tip.left, y: tip.top, width: w, height: h, rx: 3, ry: 3, fill: bg, stroke: fg }, g);
-            const txt = mkEl('text', { 'class': 'txttip-text', x: tip.left + pad, y: tip.top + pad + fs * 0.8, fill: fg, 'font-size': fs });
+            let fg = intToColor(tip.txtcolor != null ? tip.txtcolor : -16777216);
+            let bg = intToColor(tip.txtbkcolor != null ? tip.txtbkcolor : -2331);
+            // 深色模式：将过暗的文字/底色调亮以保证可读性
+            if (isDark) {
+                fg = adjustColorDark(fg);
+                bg = adjustColorDark(bg, true);
+            }
+            mkEl('rect', { 'class': 'txttip-bg', x: tip.left, y: tip.top, width: w, height: h, rx: 4, ry: 4, fill: bg, stroke: fg }, g);
+            const txt = mkEl('text', { 'class': 'txttip-text', x: tip.left + pad, y: tip.top + pad + fs * 0.8, fill: fg, 'font-size': fs, 'font-family': 'Geist Mono, Consolas, monospace' });
             (String(tip.content || '').split(/\r?\n/)).forEach((ln, li) => mkEl('tspan', { x: tip.left + pad, dy: li === 0 ? 0 : lineH, textContent: ln }, txt));
             g.appendChild(txt);
             if (this.editMode && this.selectedType === 'txt' && this.selectedId === i) {
@@ -755,6 +863,7 @@ class ENSPTopoViewer {
             }
             this.labelsLayer.appendChild(g);
         });
+        this.updateDirty();
     }
 
     // 注释与文本框大小同步变化（eNSP 行为）：
@@ -802,36 +911,23 @@ class ENSPTopoViewer {
         const b = document.getElementById('btnTogglePorts');
         if (b) {
             b.classList.toggle('active', this.showAllPorts);
-            b.innerHTML = this.showAllPorts ? '🔌 隐藏接口' : '🔌 显示接口';
+            b.innerHTML = this.showAllPorts
+                ? '<svg class="btn-icon"><use href="#icon-plug"/></svg>隐藏接口'
+                : '<svg class="btn-icon"><use href="#icon-plug"/></svg>显示接口';
         }
         this.setStatus(this.showAllPorts ? '已显示已使用的接口' : '已隐藏接口（不显示任何接口）');
         this.renderLines();
         this.renderAllPorts();
     }
 
-    // 与 eNSP“显示接口”一致：仅显示拓扑中已用到的接口；未启用时一个接口都不显示。
+    // 接口展示以“线缆锚点处的可移动接口标签”为准（见 setChip），不再绘制设备槽位标记
     renderAllPorts() {
         this.portsLayer.innerHTML = '';
-        if (!this.showAllPorts) return;
-        this.devices.forEach(dev => {
-            const used = this.usedIndexSet(dev);
-            dev.ifaces.forEach((it, idx) => {
-                if (!used.has(idx)) return;
-                const pos = this.ifaceSlotPos(dev, idx);
-                const g = mkEl('g', { 'class': 'all-port', 'data-id': dev.id, 'data-idx': idx, 'data-x': pos[0], 'data-y': pos[1], transform: 'translate(' + pos[0] + ',' + pos[1] + ')' });
-                mkEl('circle', { 'class': 'all-port-hit', r: 7 }, g);
-                mkEl('circle', { 'class': 'all-port-dot', r: 3.2 }, g);
-                const w = Math.max(14, String(it.name).length * 5.4 + 6);
-                mkEl('rect', { 'class': 'all-port-bg', x: -w / 2, y: -7, width: w, height: 13 }, g);
-                mkEl('text', { 'class': 'all-port-label', x: 0, y: 2.5, textContent: it.name }, g);
-                this.portsLayer.appendChild(g);
-            });
-        });
     }
 
     renderDeviceList() {
         this.deviceList.innerHTML = '';
-        if (!this.devices.size) { this.deviceList.innerHTML = '<p class="empty-hint">请打开/导入拓扑文件</p>'; return; }
+        if (!this.devices.size) { this.deviceList.innerHTML = '<p class="empty-hint">请打开拓扑文件</p>'; return; }
         [...this.devices.values()].sort((a, b) => a.name.localeCompare(b.name, 'zh')).forEach(dev => {
             const item = document.createElement('div');
             item.className = 'device-item';
@@ -921,10 +1017,17 @@ class ENSPTopoViewer {
 
     // ---------------- 鼠标交互 ----------------
     onMouseDown(e) {
+        if (e.button !== 0) return;
         const target = e.target;
         if (this.pendingAddId) {
             const w = this.screenToWorld(e.clientX, e.clientY);
             this.placePending(w.x, w.y);
+            e.preventDefault();
+            return;
+        }
+        if (this.pendingTxt) {
+            const w = this.screenToWorld(e.clientX, e.clientY);
+            this.placeTxt(w.x, w.y);
             e.preventDefault();
             return;
         }
@@ -1107,15 +1210,11 @@ class ENSPTopoViewer {
             this.dragState = null;
             this.svg.style.cursor = 'grab';
             this.refreshPanel();
+            this.updateDirty();
         }
     }
 
     onCanvasClick(e) {
-        if (this.pendingAddId) {
-            const w = this.screenToWorld(e.clientX, e.clientY);
-            this.placePending(w.x, w.y);
-            return;
-        }
         if (this._placedAt && Date.now() - this._placedAt < 350) return;
         const hit = e.target.closest('.device-group, .line-path, .line-hotspot, .txttip-group, .port-chip');
         if (!hit) this.deselectAll();
@@ -1269,7 +1368,7 @@ class ENSPTopoViewer {
         if (!sd || !dd) { this.setStatus('设备不存在', 'error'); return false; }
         if (si != null && di != null) {
             const fi = sd.ifaces[si], fj = dd.ifaces[di];
-            if (fi.family !== fj.family) { this.setStatus('两端接口类型不匹配：' + fi.name + ' ↔ ' + fj.name, 'error'); return false; }
+            if (fi.family !== fj.family) { this.setStatus('两端接口类型不匹配：' + fi.name + ' / ' + fj.name, 'error'); return false; }
             const need = this.pendingCable ? (CABLE_TYPES[this.pendingCable] || {}).fam : null;
             if (need && fi.family !== need) { this.setStatus('所选【' + (CABLE_TYPES[this.pendingCable] || { label: this.pendingCable }).label + '】不能用于该接口', 'error'); return false; }
             if (this.usedIndexSet(sd).has(si)) { this.setStatus('源接口 ' + fi.name + ' 已被占用', 'error'); return false; }
@@ -1295,7 +1394,7 @@ class ENSPTopoViewer {
         // 两端都指定了具体接口且直接可连 → 立即建链（与 eNSP 端口拖拽一致）
         if (siPreset != null && diPreset != null && this.tryConnect(sid, siPreset, did, diPreset)) return;
         this.linkState = { sid, did, family: null };
-        document.getElementById('linkModalDesc').textContent = (sd.name || '?') + '  ↔  ' + (dd.name || '?');
+        document.getElementById('linkModalDesc').textContent = (sd.name || '?') + '  →  ' + (dd.name || '?');
         const constraint = this.pendingCable ? (CABLE_TYPES[this.pendingCable] || {}).fam : null;
         const cableL = this.pendingCable && CABLE_TYPES[this.pendingCable] ? CABLE_TYPES[this.pendingCable].label : null;
         const famMap = {
@@ -1410,6 +1509,7 @@ class ENSPTopoViewer {
 
     // ---------------- 新增设备 ----------------
     beginPlace(tpl) {
+        this.ensureStarted();
         this.enableEdit();
         this.cancelAll();
         this.pendingAddTpl = tpl;
@@ -1424,7 +1524,7 @@ class ENSPTopoViewer {
         const t = this.pendingAddTpl;
         if (!t) return;
         const g = mkEl('g', { 'class': 'preview-device', transform: 'translate(' + x + ',' + y + ')' });
-        mkEl('rect', { x: -52, y: -36, width: 104, height: 72, fill: 'white', stroke: '#1a73e8', 'stroke-width': 2, 'stroke-dasharray': '5 4' }, g);
+        mkEl('rect', { x: -52, y: -36, width: 104, height: 72, fill: '#faf9f5', stroke: '#c96442', 'stroke-width': 2, 'stroke-dasharray': '5 4' }, g);
         const href = this.deviceIcon(t.model);
         if (href) mkEl('image', { href, x: -18, y: -26, width: 40, height: 40 }, g);
         this.previewLayer.appendChild(g);
@@ -1445,14 +1545,44 @@ class ENSPTopoViewer {
         const dev = { attrs: {}, id, name, model: tpl.model, cx: x, cy: y, slots, system_mac: this.randomMac(), com_port: String(this.maxComPort() + 1) };
         dev.ifaces = this.expandIfaces(dev);
         this.devices.set(id, dev);
-        this.pendingAddTpl = null;
-        this.pendingAddId = null;
         this.clearGhost();
-        this.setHint('');
-        this.render();
-        this.selectDevice(id);
         this._placedAt = Date.now();
+        this.setHint('点击空白处继续添加 ' + tpl.model + '（右键结束）');
+        this.render();
         this.setStatus('已添加 ' + name + '（' + tpl.model + '）');
+    }
+
+    // 首次打开尚未新建/加载时，自动初始化一个空白拓扑，省去先点“新建”这一步
+    ensureStarted() {
+        if (!this._topologyStarted) this.newTopo();
+    }
+
+    // ---------------- 新增注释 ----------------
+    beginTxt() {
+        this.ensureStarted();
+        this.enableEdit();
+        this.cancelAll();
+        this.pendingTxt = true;
+        this.activeTool = 'select';
+        this.setToolButtonClasses();
+        this.setHint('点击画布放置注释（右键结束）');
+    }
+
+    placeTxt(x, y) {
+        this.pushHistory();
+        const tip = { left: x, top: y, right: x + 60, bottom: y + 20, content: '注释', txtcolor: -16777216, txtbkcolor: -2331 };
+        this.txttips.push(tip);
+        this.layoutTxt(tip);
+        this._placedAt = Date.now();
+        this.selectedType = 'txt';
+        this.selectedId = this.txttips.length - 1;
+        this.applySelection();
+        this.renderTxttips();
+        this.refreshPanel();
+        this.setHint('点击空白处继续添加注释（右键结束）');
+        this.setStatus('已添加注释，可在右侧修改内容');
+        const ta = this.propertyPanel.querySelector('.prop-txt-input');
+        if (ta) ta.focus();
     }
 
     randomMac() {
@@ -1471,6 +1601,7 @@ class ENSPTopoViewer {
         if (this.pendingCable) { this.pendingCable = null; this.renderPalette(); }
         this.pendingAddTpl = null;
         this.pendingAddId = null;
+        this.pendingTxt = false;
         this.clearGhost();
         this.cancelLine();
     }
@@ -1504,6 +1635,23 @@ class ENSPTopoViewer {
         this.undoStack.push(this.snapshot());
         if (this.undoStack.length > 50) this.undoStack.shift();
         this.redoStack.length = 0;
+    }
+
+    snapKey() { return JSON.stringify(this.snapshot()); }
+
+    // 比较当前状态与上次保存/加载的状态，未保存时让保存按钮变色
+    updateDirty() {
+        const dirty = this._savedSnap != null && this._savedSnap !== this.snapKey();
+        if (dirty !== this.dirty) {
+            this.dirty = dirty;
+            const b = document.getElementById('btnSave');
+            if (b) b.classList.toggle('dirty', dirty);
+        }
+    }
+
+    markClean() {
+        this._savedSnap = this.snapKey();
+        this.updateDirty();
     }
 
     undo() {
@@ -1559,7 +1707,7 @@ class ENSPTopoViewer {
         if (this.editMode) {
             h += '<div class="property-row"><span class="property-label">X</span><input class="property-input prop-x" value="' + Math.round(dev.cx) + '"></div>';
             h += '<div class="property-row"><span class="property-label">Y</span><input class="property-input prop-y" value="' + Math.round(dev.cy) + '"></div>';
-            h += '<button class="btn-danger prop-delete">🗑 删除设备</button>';
+            h += '<button class="btn-danger prop-delete"><svg class="btn-icon" style="margin-right:4px"><use href="#icon-trash"/></svg>删除设备</button>';
         }
         h += '</div>';
         const usedIdx = this.usedIndexSet(dev);
@@ -1578,7 +1726,7 @@ class ENSPTopoViewer {
                 const otherId = l.srcDeviceID === dev.id ? l.destDeviceID : l.srcDeviceID;
                 const other = this.devices.get(otherId);
                 const types = (l.pairs || []).map(p => p.lineName).join(' / ');
-                h += '<div class="property-row"><span class="property-label">↔ ' + (other ? escHTML(other.name) : '?') + '</span><span class="property-value" style="cursor:pointer" data-select-line="' + li + '">' + escHTML(types) + '</span></div>';
+                h += '<div class="property-row"><span class="property-label">' + (other ? escHTML(other.name) : '?') + '</span><span class="property-value" style="cursor:pointer" data-select-line="' + li + '">' + escHTML(types) + '</span></div>';
             });
             h += '</div>';
         }
@@ -1606,7 +1754,7 @@ class ENSPTopoViewer {
             (this.editMode
                 ? '<input class="property-input prop-txt-bg" type="color" value="' + bg + '">'
                 : '<span class="color-swatch" style="background:' + bg + '"></span><span class="property-value">' + bg + '</span>') + '</div>';
-        if (this.editMode) h += '<button class="btn-danger prop-delete-txt">🗑 删除注释</button>';
+        if (this.editMode) h += '<button class="btn-danger prop-delete-txt"><svg class="btn-icon" style="margin-right:4px"><use href="#icon-trash"/></svg>删除注释</button>';
         h += '</div>';
         return h;
     }
@@ -1633,7 +1781,7 @@ class ENSPTopoViewer {
             h += '<div class="property-row"><span class="property-label">接口</span><span class="property-value">' + escHTML(ns) + ' → ' + escHTML(nd) + ' (' + escHTML(p.lineName) + ')</span></div>';
         });
         h += '</div>';
-        if (this.editMode) h += '<button class="btn-danger prop-delete-line">🗑 删除此链路</button>';
+        if (this.editMode) h += '<button class="btn-danger prop-delete-line"><svg class="btn-icon" style="margin-right:4px"><use href="#icon-trash"/></svg>删除此链路</button>';
         return h;
     }
 
@@ -1722,54 +1870,87 @@ class ENSPTopoViewer {
 
     renderPalette() {
         this.palette.innerHTML = '';
-        DEVICE_CATALOG.forEach(group => {
+        const addHeader = (label) => {
             const catEl = document.createElement('div');
             catEl.className = 'palette-cat';
-            catEl.textContent = group.label;
-            this.palette.appendChild(catEl);
-            if (group.cables) {
-                group.cables.forEach(k => {
-                    const c = CABLE_TYPES[k] || { label: k };
-                    const item = document.createElement('button');
-                    item.type = 'button';
-                    item.className = 'palette-item palette-cable' + (this.pendingCable === k ? ' active' : '');
-                    item.dataset.cable = k;
-                    item.title = '选择 ' + c.label + '：依次点击两台设备的接口/设备添加连线';
-                    const col = c.color || '#7a8b9a';
-                    item.innerHTML =
-                        '<svg class="cable-icon" viewBox="0 0 24 14" width="24" height="14" aria-hidden="true">' +
-                        '<path d="M3 11 L21 3" stroke="' + col + '" stroke-width="2.4" fill="none" stroke-linecap="round"/>' +
-                        '<rect x="1" y="9" width="5" height="5" rx="1.2" fill="' + col + '"/>' +
-                        '<rect x="18" y="0" width="5" height="5" rx="1.2" fill="' + col + '"/>' +
-                        '</svg>' +
-                        '<span>' + c.label + '</span>';
-                    item.addEventListener('click', (ev) => { ev.preventDefault(); ev.stopPropagation(); this.pickCable(k); });
-                    item.addEventListener('pointerdown', (ev) => ev.stopPropagation());
-                    this.palette.appendChild(item);
-                });
-                return;
-            }
-            group.models.forEach(model => {
-                const tpl = TEMPLATES[model] || { model, prefix: (model.match(/^[A-Za-z]+/) || [model])[0], imp: [['GE', 4]] };
-                const item = document.createElement('button');
-                item.type = 'button';
-                item.className = 'palette-item';
-                item.title = '点击放置 ' + model + '（需开启编辑）';
-                const href = this.deviceIcon(model);
-                if (href) {
-                    const img = document.createElement('img');
-                    img.src = href;
-                    img.alt = '';
-                    img.onerror = () => { img.style.display = 'none'; };
-                    item.appendChild(img);
-                }
-                const span = document.createElement('span');
-                span.textContent = model;
-                item.appendChild(span);
-                item.addEventListener('click', (ev) => { ev.preventDefault(); ev.stopPropagation(); this.beginPlace(tpl); });
-                item.addEventListener('pointerdown', (ev) => ev.stopPropagation());
-                this.palette.appendChild(item);
+            const arrow = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            arrow.setAttribute('class', 'palette-cat-arrow chev-icon');
+            arrow.setAttribute('viewBox', '0 0 24 24');
+            arrow.innerHTML = '<use href="#icon-chevron"/>';
+            const txt = document.createElement('span');
+            txt.textContent = label;
+            catEl.appendChild(arrow);
+            catEl.appendChild(txt);
+            catEl.title = '点击收起 / 展开';
+            return catEl;
+        };
+        // 每个分类一个分组：分类标题 + 可折叠的条目容器
+        const startGroup = (label) => {
+            const grp = document.createElement('div');
+            grp.className = 'palette-group';
+            const catEl = addHeader(label);
+            catEl.addEventListener('click', () => {
+                const collapsed = grp.classList.toggle('collapsed');
+                this.paletteCollapsed[label] = collapsed;
             });
+            grp.appendChild(catEl);
+            const itemsEl = document.createElement('div');
+            itemsEl.className = 'palette-cat-items';
+            grp.appendChild(itemsEl);
+            this.palette.appendChild(grp);
+            if (this.paletteCollapsed[label]) grp.classList.add('collapsed');
+            return itemsEl;
+        };
+        const addCableItem = (itemsEl, k) => {
+            const c = CABLE_TYPES[k] || { label: k };
+            const item = document.createElement('button');
+            item.type = 'button';
+            item.className = 'palette-item palette-cable' + (this.pendingCable === k ? ' active' : '');
+            item.dataset.cable = k;
+            item.title = '选择 ' + c.label + '：依次点击两台设备的接口/设备添加连线';
+            const col = c.color || '#9b988c';
+            item.innerHTML =
+                '<svg class="cable-icon" viewBox="0 0 24 14" width="24" height="14" aria-hidden="true">' +
+                '<path d="M3 11 L21 3" stroke="' + col + '" stroke-width="2.4" fill="none" stroke-linecap="round"/>' +
+                '<rect x="1" y="9" width="5" height="5" rx="1.2" fill="' + col + '"/>' +
+                '<rect x="18" y="0" width="5" height="5" rx="1.2" fill="' + col + '"/>' +
+                '</svg>' +
+                '<span>' + c.label + '</span>';
+            item.addEventListener('click', (ev) => { ev.preventDefault(); ev.stopPropagation(); this.pickCable(k); });
+            item.addEventListener('pointerdown', (ev) => ev.stopPropagation());
+            itemsEl.appendChild(item);
+        };
+        const addModelItem = (itemsEl, model) => {
+            const tpl = TEMPLATES[model] || { model, prefix: (model.match(/^[A-Za-z]+/) || [model])[0], imp: [['GE', 4]] };
+            const item = document.createElement('button');
+            item.type = 'button';
+            item.className = 'palette-item';
+            item.title = '点击放置 ' + model + '（需开启编辑）';
+            const href = this.deviceIcon(model);
+            if (href) {
+                const img = document.createElement('img');
+                img.src = href;
+                img.alt = '';
+                img.onerror = () => { img.style.display = 'none'; };
+                item.appendChild(img);
+            }
+            const span = document.createElement('span');
+            span.textContent = model;
+            item.appendChild(span);
+            item.addEventListener('click', (ev) => { ev.preventDefault(); ev.stopPropagation(); this.beginPlace(tpl); });
+            item.addEventListener('pointerdown', (ev) => ev.stopPropagation());
+            itemsEl.appendChild(item);
+        };
+
+        // 常用分类（置顶，仅含指定设备与连线）
+        let el = startGroup(COMMON_ITEMS.label);
+        COMMON_ITEMS.items.forEach(it => { if (it.cable) addCableItem(el, it.cable); else addModelItem(el, it.model); });
+
+        // 设备分类（与 items.xml 完全一致）
+        DEVICE_CATALOG.forEach(group => {
+            el = startGroup(group.label);
+            if (group.cables) { group.cables.forEach(k => addCableItem(el, k)); return; }
+            group.models.forEach(model => addModelItem(el, model));
         });
     }
 
@@ -1781,18 +1962,30 @@ class ENSPTopoViewer {
         this.devices.forEach(dev => {
             const a = Object.assign({}, dev.attrs || {});
             a.model = dev.model; a.name = dev.name;
+            if (!('id' in a) && dev.id) a.id = dev.id;
+            if (!('settings' in a)) a.settings = '';
+            if (!('bootmode' in a)) a.bootmode = '0';
             if (!('com_port' in a) && dev.com_port != null) a.com_port = dev.com_port;
             if (!('system_mac' in a) && dev.system_mac) a.system_mac = dev.system_mac;
             let attrText = '';
-            for (const k of ['id', 'name', 'model', 'poe', 'settings', 'system_mac', 'com_port', 'bootmode']) if (k in a) attrText += ' ' + k + '="' + xmlAttr(a[k]) + '"';
-            for (const k in a) if (!['id', 'name', 'model', 'poe', 'settings', 'system_mac', 'com_port', 'bootmode', 'cx', 'cy', 'edit_left', 'edit_top'].includes(k)) attrText += ' ' + k + '="' + xmlAttr(a[k]) + '"';
-            out += '        <dev' + attrText + ' cx="' + dev.cx.toFixed(2) + '" cy="' + dev.cy.toFixed(2) + '" edit_left="' + dev.cx.toFixed(2) + '" edit_top="' + dev.cy.toFixed(2) + '">' + NL;
+            for (const k of ['id', 'name', 'poe', 'model', 'settings', 'system_mac', 'com_port', 'bootmode']) if (k in a) attrText += ' ' + k + '="' + xmlAttr(a[k]) + '"';
+            for (const k in a) if (!['id', 'name', 'poe', 'model', 'settings', 'system_mac', 'com_port', 'bootmode', 'cx', 'cy', 'edit_left', 'edit_top'].includes(k)) attrText += ' ' + k + '="' + xmlAttr(a[k]) + '"';
+            const editL = (a.edit_left !== undefined) ? a.edit_left : Math.round(dev.cx + 27);
+            const editT = (a.edit_top !== undefined) ? a.edit_top : Math.round(dev.cy + 54);
+            out += '        <dev' + attrText + ' cx="' + dev.cx.toFixed(6) + '" cy="' + dev.cy.toFixed(6) + '" edit_left="' + editL + '" edit_top="' + editT + '">' + NL;
             (dev.slots || []).forEach(slot => {
                 let sat = '';
                 for (const k in (slot.attrs || {})) sat += ' ' + k + '="' + xmlAttr(slot.attrs[k]) + '"';
+                const haveIface = (slot.interfaces || []).length || (slot.extras || []).length;
+                if (!haveIface) { out += '            <slot' + sat + ' />' + NL; return; }
                 out += '            <slot' + sat + '>' + NL;
                 (slot.interfaces || []).forEach(ic => {
                     out += '                <interface sztype="' + xmlAttr(ic.sztype || 'Ethernet') + '" interfacename="' + xmlAttr(ic.interfacename || 'GE') + '" count="' + (ic.count || 0) + '" />' + NL;
+                });
+                (slot.extras || []).forEach(m => {
+                    let mt = '';
+                    for (const k in m) mt += ' ' + k + '="' + xmlAttr(m[k] || '') + '"';
+                    out += '                <interfaceMap' + mt + ' />' + NL;
                 });
                 out += '            </slot>' + NL;
             });
@@ -1810,7 +2003,9 @@ class ENSPTopoViewer {
             out += '        </line>' + NL;
         });
         out += '    </lines>' + NL;
-        out += (this.shapesRaw || '    <shapes />') + NL;
+        let shLine = this.shapesRaw || '<shapes />';
+        if (!/\n/.test(shLine)) shLine = shLine.replace(/<shapes\s*\/>$/i, '<shapes />');
+        out += '    ' + shLine + NL;
         out += '    <txttips>' + NL;
         this.txttips.forEach(t => {
             let pt = '';
@@ -1844,6 +2039,7 @@ class ENSPTopoViewer {
                 const w = await this.fsHandle.createWritable();
                 await w.write(new Blob([bytes], { type: 'application/xml' }));
                 await w.close();
+                this.markClean();
                 this.setStatus('已保存: ' + this.fileNameStr);
                 return;
             } catch (e) { }
@@ -1860,6 +2056,7 @@ class ENSPTopoViewer {
                 await w.write(new Blob([bytes], { type: 'application/xml' }));
                 await w.close();
                 this.fsHandle = handle;
+                this.markClean();
                 this.setStatus('已保存: ' + (handle.name || suggested));
                 return;
             } catch (err) { if (err && err.name === 'AbortError') return; }
@@ -1870,12 +2067,13 @@ class ENSPTopoViewer {
         a.href = url; a.download = suggested;
         document.body.appendChild(a); a.click();
         setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 300);
+        this.markClean();
         this.setStatus('已下载: ' + suggested);
     }
 
     updateCounts() {
-        this.deviceCountEl.textContent = '设备: ' + this.devices.size;
-        this.lineCountEl.textContent = '链路: ' + this.lines.length;
+        this.deviceCountEl.textContent = this.devices.size;
+        this.lineCountEl.textContent = this.lines.length;
     }
 
     updateNameCounter() {
