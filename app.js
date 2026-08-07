@@ -260,6 +260,7 @@ class ENSPTopoViewer {
         this._marqueeKeys = null;
         this._suppressClickT = 0;   // 框选/平移结束后短暂屏蔽 click，防止松手误取消选择
         this._lastMouse = null;     // 最近一次鼠标位置（世界坐标），用于按鼠标位置粘贴
+        this._spaceDown = false;    // 空格键是否按住（空格+左键拖拽 = 平移画布）
 
         this.pendingAddTpl = null;
         this.pendingAddId = null;
@@ -398,6 +399,10 @@ class ENSPTopoViewer {
             else if (e.key === '+' || e.key === '=') this.zoomAt(this.canvasContainer.clientWidth / 2, this.canvasContainer.clientHeight / 2, 1.2);
             else if (e.key === '-') this.zoomAt(this.canvasContainer.clientWidth / 2, this.canvasContainer.clientHeight / 2, 0.8);
             else if (e.key === '0') this.fitToView();
+            else if (e.key === ' ' || e.code === 'Space') { e.preventDefault(); this._spaceDown = true; }
+        });
+        window.addEventListener('keyup', (e) => {
+            if (e.key === ' ' || e.code === 'Space') this._spaceDown = false;
         });
 
         // 连线参数对话框
@@ -1037,15 +1042,16 @@ class ENSPTopoViewer {
             }
             return;
         }
-        // 中键：平移画布（框选改由左键承担，平移交给中键/滚轮）
-        if (btn === 1) {
+        // 空格键：按住空格+左键拖拽 → 平移画布（替代原中键平移，避免与浏览器鼠标手势冲突）
+        if (btn === 1) { e.preventDefault(); return; }   // 中键一律忽略
+        if (btn !== 0) return;
+        const target = e.target;
+        if (this._spaceDown) {
             e.preventDefault();
             this.dragState = { type: 'pan', bx: this.translateX, by: this.translateY, sx: e.clientX, sy: e.clientY };
             this.svg.style.cursor = 'grabbing';
             return;
         }
-        if (btn !== 0) return;
-        const target = e.target;
         if (this.pendingAddId) {
             const w = this.screenToWorld(e.clientX, e.clientY);
             this.placePending(w.x, w.y);
