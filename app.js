@@ -166,6 +166,8 @@ const TEMPLATES = {
     'HUB':      { model: 'HUB',      prefix: 'HUB', imp: [['Ethernet', 16]] }
 };
 
+function prefixOf(model) { return (TEMPLATES[model] || {}).prefix || 'Dev'; }
+
 // 添加设备的分类与 res/items.xml 完全一致（分类名、顺序、每类下的设备顺序）。
 // 设备连线与 eNSP 完全一致（名称/线名见 eNSP_Client.exe 图标资源表）。
 // 设备分类一一对应 eNSP 的 res\items.xml（category → description 原文）。
@@ -252,6 +254,12 @@ class ENSPTopoViewer {
         this.activeTool = 'select';
         this.selectedType = null;
         this.selectedId = null;
+        this.selKeys = new Set();      // 多选集合：'dev:<id>' | 'line:<idx>' | 'txt:<idx>'
+        this.clipboard = null;         // 复制/剪贴板 { devices, lines, txttips }
+        this._pasteCount = 0;
+        this._marqueeKeys = null;
+        this._suppressClickT = 0;   // 框选/平移结束后短暂屏蔽 click，防止松手误取消选择
+        this._lastMouse = null;     // 最近一次鼠标位置（世界坐标），用于按鼠标位置粘贴
 
         this.pendingAddTpl = null;
         this.pendingAddId = null;
@@ -381,6 +389,10 @@ class ENSPTopoViewer {
             else if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || e.key === 'Y')) { e.preventDefault(); this.redo(); }
             else if ((e.ctrlKey || e.metaKey) && 'sS'.indexOf(e.key) >= 0) { e.preventDefault(); this.save(false); }
             else if ((e.ctrlKey || e.metaKey) && 'oO'.indexOf(e.key) >= 0) { e.preventDefault(); this.openSystemFile(); }
+            else if ((e.ctrlKey || e.metaKey) && 'aA'.indexOf(e.key) >= 0) { e.preventDefault(); this.selectAll(); }
+            else if ((e.ctrlKey || e.metaKey) && 'cC'.indexOf(e.key) >= 0) { e.preventDefault(); this.copySelection(); }
+            else if ((e.ctrlKey || e.metaKey) && 'xX'.indexOf(e.key) >= 0) { e.preventDefault(); this.cut(); }
+            else if ((e.ctrlKey || e.metaKey) && 'vV'.indexOf(e.key) >= 0) { e.preventDefault(); this.paste(); }
             else if (e.key === 'Delete' || e.key === 'Backspace') this.deleteSelection();
             else if (e.key === 'Escape') { this.cancelAll(); this.deselectAll(); }
             else if (e.key === '+' || e.key === '=') this.zoomAt(this.canvasContainer.clientWidth / 2, this.canvasContainer.clientHeight / 2, 1.2);
@@ -398,17 +410,9 @@ class ENSPTopoViewer {
             if (e.target.id === 'linkModal') { this.closeLinkModal(); this.cancelLine(); }
         });
 
-        // 右键：取消粘性放置/已选连线，恢复拖拽模式；无放置状态时取消当前选中
-        this.svg.addEventListener('contextmenu', (e) => {
-            e.preventDefault();
-            if (this.pendingAddId || this.pendingTxt || this.pendingCable || this.lineSourceId) {
-                this.cancelAll();
-                this.svg.style.cursor = 'grab';
-                this.setStatus('已取消，恢复拖拽模式');
-            } else {
-                this.deselectAll();
-            }
-        });
+        // 阻止浏览器原生右键菜单以及各类右键手势（前进/后退、滚动、停止加载、关闭标签、切换标签等）。
+        // 右键框选与“右键轻点取消选择”由 onMouseDown/onMouseUp（marquee）处理。
+        this.svg.addEventListener('contextmenu', (e) => { e.preventDefault(); });
 
         // 工具栏高度：拖动底部手柄自由调节（可完全隐藏）
         const resizer = document.getElementById('toolbarResizer');
@@ -1017,7 +1021,30 @@ class ENSPTopoViewer {
 
     // ---------------- 鼠标交互 ----------------
     onMouseDown(e) {
-        if (e.button !== 0) return;
+        const btn = e.button;
+        // 右键：仅用于取消操作/取消选择，绝不用于拖拽。
+        // （浏览器的鼠标手势引擎会在“按住右键拖动”时接管并弹出 前进/后退/滚动 等手势，
+        //   并吞掉我们的 mouseup，导致右键框选永远无法生效，因此框选统一改用左键。）
+        if (btn === 2) {
+            e.preventDefault();
+            this._suppressClickT = Date.now() + 300;
+            if (this.pendingAddId || this.pendingTxt || this.pendingCable || this.lineSourceId) {
+                this.cancelAll();
+                this.svg.style.cursor = 'grab';
+                this.setStatus('已取消');
+            } else {
+                this.deselectAll();
+            }
+            return;
+        }
+        // 中键：平移画布（框选改由左键承担，平移交给中键/滚轮）
+        if (btn === 1) {
+            e.preventDefault();
+            this.dragState = { type: 'pan', bx: this.translateX, by: this.translateY, sx: e.clientX, sy: e.clientY };
+            this.svg.style.cursor = 'grabbing';
+            return;
+        }
+        if (btn !== 0) return;
         const target = e.target;
         if (this.pendingAddId) {
             const w = this.screenToWorld(e.clientX, e.clientY);
@@ -1099,12 +1126,36 @@ class ENSPTopoViewer {
         if (devG) {
             const id = devG.dataset.id;
             if (this.editMode && this.activeTool === 'line') { this.lineHitDevice(id); return; }
-            this.selectDevice(id);
+            // Ctrl + 左键：逐个切换该设备是否加入多选
+            if (e.ctrlKey) {
+                const k = 'dev:' + id;
+                if (this.selKeys.has(k)) { this.selKeys.delete(k); }
+                else { this.cancelAll(); this.selKeys.add(k); }
+                this.selectedType = 'device';
+                this.selectedId = id;
+                this.applySelection();
+                this.renderTxttips();
+                this.refreshPanel();
+                this._suppressClickT = Date.now() + 250;
+                e.preventDefault();
+                return;
+            }
+            // 若该设备尚未在当前选中集合中，先单独选中它；已在选中集合（多选）中则保留整组选中
+            if (!this.selKeys.has('dev:' + id)) {
+                this.selectDevice(id);
+            }
             if (this.editMode && this.activeTool === 'select') {
                 const w = this.screenToWorld(e.clientX, e.clientY);
-                const d = this.devices.get(id);
+                // 汇总当前选中集合里所有设备的原始位置；数量>1 时整组一起拖动移动
+                const c0s = new Map();
+                this.devices.forEach(d => { if (this.selKeys.has('dev:' + d.id)) c0s.set(d.id, { cx: d.cx, cy: d.cy }); });
                 this._preDrag = this.snapshot();
-                this.dragState = { type: 'device', id, didMove: false, ox: w.x, oy: w.y, c0x: d.cx, c0y: d.cy };
+                if (c0s.size > 1) {
+                    this.dragState = { type: 'selmove', didMove: false, ox: w.x, oy: w.y, c0s };
+                } else {
+                    const d = this.devices.get(id);
+                    this.dragState = { type: 'device', id, didMove: false, ox: w.x, oy: w.y, c0x: d.cx, c0y: d.cy };
+                }
                 e.preventDefault();
             }
             return;
@@ -1115,11 +1166,18 @@ class ENSPTopoViewer {
             if (!isNaN(idx)) { this.selectLine(idx); return; }
         }
 
-        this.dragState = { type: 'pan', bx: this.translateX, by: this.translateY, sx: e.clientX, sy: e.clientY };
-        this.svg.style.cursor = 'grabbing';
+        // 空白处左键拖拽 → 框选多选（松手保持选中）；左键轻点空白 → 取消选择
+        // （平移画布请用中键拖拽或滚轮，避免与浏览器鼠标手势冲突）
+        const w = this.screenToWorld(e.clientX, e.clientY);
+        this.dragState = { type: 'marquee', sx: w.x, sy: w.y, cx: w.x, cy: w.y, started: false };
+        this.drawMarqueeRect(w.x, w.y, w.x, w.y);
+        e.preventDefault();
+        this.svg.style.cursor = 'crosshair';
     }
 
     onMouseMove(e) {
+        const wm = this.screenToWorld(e.clientX, e.clientY);
+        this._lastMouse = { x: wm.x, y: wm.y };
         if (this.pendingAddId) {
             const w = this.screenToWorld(e.clientX, e.clientY);
             this.ghostX = w.x; this.ghostY = w.y;
@@ -1133,6 +1191,24 @@ class ENSPTopoViewer {
             this.translateX = st.bx + (e.clientX - st.sx);
             this.translateY = st.by + (e.clientY - st.sy);
             this.updateView();
+        } else if (st.type === 'marquee') {
+            st.started = true;
+            st.cx = w.x; st.cy = w.y;
+            this.drawMarqueeRect(st.sx, st.sy, st.cx, st.cy);
+            this.applyMarqueeSelection(st.sx, st.sy, st.cx, st.cy);
+        } else if (st.type === 'selmove') {
+            st.didMove = true;
+            const dx = w.x - st.ox, dy = w.y - st.oy;
+            st.c0s.forEach((c, id) => {
+                const d = this.devices.get(id);
+                if (!d) return;
+                d.cx = Math.round(c.cx + dx);
+                d.cy = Math.round(c.cy + dy);
+                const g = this.devicesLayer.querySelector('[data-id="' + id + '"]');
+                if (g) g.setAttribute('transform', 'translate(' + d.cx + ',' + d.cy + ')');
+                this.updateLinesFor(id);
+            });
+            if (this.showAllPorts) this.renderAllPorts();
         } else if (st.type === 'device') {
             st.didMove = true;
             const d = this.devices.get(st.id);
@@ -1180,7 +1256,48 @@ class ENSPTopoViewer {
 
     onMouseUp(e) {
         if (this.dragState) {
-            if (this.dragState.type === 'portlink') {
+            const st = this.dragState;
+            if (st.type === 'marquee') {
+                this.clearMarquee();
+                this.dragState = null;
+                this.svg.style.cursor = 'grab';
+                if (st.started) {
+                    // 拖拽框选：松手后保持选中，屏蔽随后 click 误取消
+                    const keys = this._marqueeKeys || [];
+                    this._marqueeKeys = null;
+                    this.selectMultiple(keys);
+                    this._suppressClickT = Date.now() + 300;
+                } else {
+                    // 右键轻点：取消选择
+                    this.deselectAll();
+                }
+                return;
+            }
+            if (st.type === 'selmove') {
+                this.dragState = null;
+                this.svg.style.cursor = 'grab';
+                if (!st.didMove) {
+                    // 仅点按（未拖动）选中设备：保留当前选择，不做任何改动
+                    return;
+                }
+                if (this._preDrag) {
+                    this.undoStack.push(this._preDrag);
+                    if (this.undoStack.length > 50) this.undoStack.shift();
+                    this.redoStack.length = 0;
+                }
+                this._preDrag = null;
+                this.refreshPanel();
+                this.updateDirty();
+                return;
+            }
+            if (st.type === 'pan') {
+                this.dragState = null;
+                this.svg.style.cursor = 'grab';
+                this._suppressClickT = Date.now() + 300;
+                this.deselectAll();
+                return;
+            }
+            if (st.type === 'portlink') {
                 const st = this.dragState;
                 this.clearLinkPreview();
                 if (st.didMove) {
@@ -1215,6 +1332,7 @@ class ENSPTopoViewer {
     }
 
     onCanvasClick(e) {
+        if (this._suppressClickT && Date.now() < this._suppressClickT) return;
         if (this._placedAt && Date.now() - this._placedAt < 350) return;
         const hit = e.target.closest('.device-group, .line-path, .line-hotspot, .txttip-group, .port-chip');
         if (!hit) this.deselectAll();
@@ -1235,6 +1353,7 @@ class ENSPTopoViewer {
         this.cancelAll();
         this.selectedType = 'device';
         this.selectedId = id;
+        this.selKeys = new Set(['dev:' + id]);
         this.applySelection();
         this.renderTxttips();
         this.refreshPanel();
@@ -1244,6 +1363,7 @@ class ENSPTopoViewer {
         this.cancelAll();
         this.selectedType = 'line';
         this.selectedId = idx;
+        this.selKeys = new Set(['line:' + idx]);
         this.applySelection();
         this.renderTxttips();
         this.refreshPanel();
@@ -1253,6 +1373,7 @@ class ENSPTopoViewer {
         this.cancelAll();
         this.selectedType = 'txt';
         this.selectedId = idx;
+        this.selKeys = new Set(['txt:' + idx]);
         this.applySelection();
         this.renderTxttips();
         this.refreshPanel();
@@ -1261,29 +1382,227 @@ class ENSPTopoViewer {
     deselectAll() {
         this.selectedType = null;
         this.selectedId = null;
+        this.selKeys = new Set();
+        this._marqueeKeys = null;
+        this.applySelection();
+        this.renderTxttips();
+        this.refreshPanel();
+    }
+
+    // 当前选中集合里是否包含设备（右键是否应变为“整体移动”）
+    hasSelectedDevices() {
+        for (const k of this.selKeys) if (k.startsWith('dev:')) return true;
+        return false;
+    }
+
+    // 多选：keys 为 ['dev:xx','line:yy','txt:zz',...]。单个则按类型单选中以便属性面板展示。
+    selectMultiple(keys) {
+        this.cancelAll();
+        this.selKeys = new Set(keys || []);
+        if (this.selKeys.size === 1) {
+            const k = Array.from(this.selKeys)[0];
+            if (k.startsWith('dev:')) { this.selectedType = 'device'; this.selectedId = k.slice(4); }
+            else if (k.startsWith('line:')) { this.selectedType = 'line'; this.selectedId = parseInt(k.slice(5), 10); }
+            else if (k.startsWith('txt:')) { this.selectedType = 'txt'; this.selectedId = parseInt(k.slice(4), 10); }
+        } else {
+            this.selectedType = null;
+            this.selectedId = null;
+        }
         this.applySelection();
         this.renderTxttips();
         this.refreshPanel();
     }
 
     applySelection() {
-        this.devicesLayer.querySelectorAll('.device-group').forEach(el => el.classList.toggle('selected', this.selectedType === 'device' && el.dataset.id === this.selectedId));
-        this.linesLayer.querySelectorAll('.line-path').forEach(el => el.classList.toggle('selected', this.selectedType === 'line' && el.getAttribute('data-line-idx') === String(this.selectedId)));
-        this.labelsLayer.querySelectorAll('.txttip-group').forEach(el => el.classList.toggle('selected', this.selectedType === 'txt' && el.dataset.idx === String(this.selectedId)));
-        this.deviceList.querySelectorAll('.device-item').forEach(el => el.classList.toggle('active', this.selectedType === 'device' && el.dataset.id === this.selectedId));
+        const sel = this.selKeys;
+        const sType = this.selectedType, sId = this.selectedId;
+        this.devicesLayer.querySelectorAll('.device-group').forEach(el => {
+            const on = sel.has('dev:' + el.dataset.id);
+            const single = on && sType === 'device' && el.dataset.id === String(sId);
+            el.classList.toggle('selected', single);
+            el.classList.toggle('multi-sel', on && !single);
+        });
+        this.linesLayer.querySelectorAll('.line-path').forEach(el => {
+            const on = sel.has('line:' + el.getAttribute('data-line-idx'));
+            const single = on && sType === 'line' && el.getAttribute('data-line-idx') === String(sId);
+            el.classList.toggle('selected', single);
+            el.classList.toggle('multi-sel', on && !single);
+        });
+        this.labelsLayer.querySelectorAll('.txttip-group').forEach(el => {
+            const on = sel.has('txt:' + el.dataset.idx);
+            const single = on && sType === 'txt' && el.dataset.idx === String(sId);
+            el.classList.toggle('selected', single);
+            el.classList.toggle('multi-sel', on && !single);
+        });
+        this.deviceList.querySelectorAll('.device-item').forEach(el => el.classList.toggle('active', sType === 'device' && el.dataset.id === String(sId)));
         const hi = new Set();
-        if (this.selectedType === 'line') {
-            const l = this.lines[this.selectedId];
-            if (l) { hi.add(l.srcDeviceID); hi.add(l.destDeviceID); }
+        if (sType === 'line' && this.lines[sId]) {
+            const l = this.lines[sId];
+            hi.add(l.srcDeviceID);
+            hi.add(l.destDeviceID);
         }
         this.devicesLayer.querySelectorAll('.device-group').forEach(el => el.classList.toggle('li-hi', hi.has(el.dataset.id)));
     }
 
+    // 框选：绘制可视矩形（拖动过程中调用，不高亮即刷新属性面板）
+    drawMarqueeRect(x0, y0, x1, y1) {
+        this.clearMarquee();
+        mkEl('rect', { 'class': 'marquee', x: Math.min(x0, x1), y: Math.min(y0, y1), width: Math.abs(x1 - x0), height: Math.abs(y1 - y0), rx: 3, ry: 3 }, this.previewLayer);
+    }
+
+    clearMarquee() {
+        this.previewLayer.querySelectorAll('.marquee').forEach(r => r.remove());
+    }
+
+    normBox(x0, y0, x1, y1) { return { x0: Math.min(x0, x1), y0: Math.min(y0, y1), x1: Math.max(x0, x1), y1: Math.max(y0, y1) }; }
+
+    inBox(b, x, y) { return x >= b.x0 && x <= b.x1 && y >= b.y0 && y <= b.y1; }
+
+    // 由框选矩形决定当前高亮集合（实时反馈，不刷新属性面板）
+    applyMarqueeSelection(x0, y0, x1, y1) {
+        const b = this.normBox(x0, y0, x1, y1);
+        const keys = [];
+        this.devices.forEach((d, id) => { if (this.inBox(b, d.cx, d.cy)) keys.push('dev:' + id); });
+        this.lines.forEach((l, li) => {
+            const s = this.devices.get(l.srcDeviceID), d = this.devices.get(l.destDeviceID);
+            if (s && d && this.inBox(b, (s.cx + d.cx) / 2, (s.cy + d.cy) / 2)) keys.push('line:' + li);
+        });
+        this.txttips.forEach((t, i) => { if (this.inBox(b, (t.left + t.right) / 2, (t.top + t.bottom) / 2)) keys.push('txt:' + i); });
+        this._marqueeKeys = keys;
+        this.selectedType = null;
+        this.selectedId = null;
+        this.selKeys = new Set(keys);
+        this.applySelection();
+    }
+
     deleteSelection() {
         if (!this.editMode) { this.setStatus('请先开启编辑模式再删除', 'error'); return; }
-        if (this.selectedType === 'device') this.deleteDevice(this.selectedId);
-        else if (this.selectedType === 'line') this.deleteLine(this.selectedId);
-        else if (this.selectedType === 'txt') this.deleteTxt(this.selectedId);
+        if (!this.selKeys.size) { this.setStatus('未选中任何对象'); return; }
+        this.deleteSelected();
+    }
+
+    // 删除多选集合中的对象（设备、链路、注释）；删除设备会连带其链路
+    deleteSelected() {
+        this.pushHistory();
+        const devs = new Set(), lines = new Set(), txts = new Set();
+        this.selKeys.forEach(k => {
+            if (k.startsWith('dev:')) devs.add(k.slice(4));
+            else if (k.startsWith('line:')) lines.add(parseInt(k.slice(5), 10));
+            else if (k.startsWith('txt:')) txts.add(parseInt(k.slice(4), 10));
+        });
+        let removedDev = 0, removedLines = 0, removedTxt = 0;
+        devs.forEach(id => { if (this.devices.delete(id)) removedDev++; });
+        const chosenLines = Array.from(lines).map(i => this.lines[i]).filter(Boolean);
+        const chosenSet = new Set(chosenLines);
+        const before = this.lines.length;
+        this.lines = this.lines.filter(l => !devs.has(l.srcDeviceID) && !devs.has(l.destDeviceID) && !chosenSet.has(l));
+        removedLines = before - this.lines.length;
+        Array.from(txts).sort((a, b) => b - a).forEach(i => {
+            if (i >= 0 && i < this.txttips.length) { this.txttips.splice(i, 1); removedTxt++; }
+        });
+        this.deselectAll();
+        this.render();
+        this.setStatus('已删除 ' + removedDev + ' 台设备、' + removedLines + ' 条链路、' + removedTxt + ' 条注释');
+    }
+
+    // ---------------- 全选 / 复制 / 剪切 / 粘贴（与 eNSP 快捷键一致） ----------------
+    selectAll() {
+        if (!this._topologyStarted) return;
+        const keys = [];
+        this.devices.forEach((d, id) => keys.push('dev:' + id));
+        for (let i = 0; i < this.lines.length; i++) keys.push('line:' + i);
+        for (let i = 0; i < this.txttips.length; i++) keys.push('txt:' + i);
+        this.selectMultiple(keys);
+        this.setStatus('已全选 ' + this.devices.size + ' 台设备、' + this.lines.length + ' 条链路、' + this.txttips.length + ' 条注释');
+    }
+
+    // 复制当前选中对象到内部剪贴板。链路仅当两端设备都在选中集合内时复制（与 eNSP 一致）。
+    copySelection() {
+        const keys = Array.from(this.selKeys);
+        if (!keys.length) { this.setStatus('请先框选要复制的设备'); return; }
+        const devIds = new Set(), lineIdxs = [], txtIdxs = [];
+        keys.forEach(k => {
+            if (k.startsWith('dev:')) devIds.add(k.slice(4));
+            else if (k.startsWith('line:')) lineIdxs.push(parseInt(k.slice(5), 10));
+            else if (k.startsWith('txt:')) txtIdxs.push(parseInt(k.slice(4), 10));
+        });
+        const pastedDevs = Array.from(devIds).map(id => ({ dev: this.jsonDeep(this.devices.get(id)), oldId: id }));
+        const pastedLines = [];
+        lineIdxs.forEach(li => {
+            const l = this.lines[li];
+            if (l && devIds.has(l.srcDeviceID) && devIds.has(l.destDeviceID)) pastedLines.push(this.jsonDeep(l));
+        });
+        const pastedTxts = txtIdxs.map(ti => { const t = this.txttips[ti]; return t ? this.jsonDeep(t) : null; }).filter(Boolean);
+        this.clipboard = { devices: pastedDevs, lines: pastedLines, txttips: pastedTxts };
+        this.setStatus('已复制 ' + pastedDevs.length + ' 台设备、' + pastedLines.length + ' 条链路、' + pastedTxts.length + ' 条注释（Ctrl+V 粘贴）');
+    }
+
+    cut() {
+        if (!this.selKeys.size) { this.setStatus('请先框选要剪切的设备'); return; }
+        this.copySelection();
+        this.deleteSelected();
+        this.setStatus('已剪切，Ctrl+V 粘贴');
+    }
+
+    paste() {
+        const cb = this.clipboard;
+        if (!cb || (!cb.devices.length && !cb.txttips.length)) { this.setStatus('剪贴板为空，请先 Ctrl+C 复制'); return; }
+        if (!this.editMode) { this.setStatus('请先开启编辑模式再粘贴', 'error'); return; }
+        this.pushHistory();
+        this._pasteCount++;
+        // 以鼠标当前位置为锚点粘贴：把剪贴板对象堆的几何中心对齐到鼠标处
+        const tgt = this._lastMouse || this.screenToWorld(this.canvasContainer.clientWidth / 2, this.canvasContainer.clientHeight / 2);
+        let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+        cb.devices.forEach(it => { const d = it.dev; if (d.cx < x0) x0 = d.cx; if (d.cx > x1) x1 = d.cx; if (d.cy < y0) y0 = d.cy; if (d.cy > y1) y1 = d.cy; });
+        cb.txttips.forEach(t => { if (t.left < x0) x0 = t.left; if (t.right > x1) x1 = t.right; if (t.top < y0) y0 = t.top; if (t.bottom > y1) y1 = t.bottom; });
+        const dx = (isFinite(x0) && isFinite(x1)) ? tgt.x - (x0 + x1) / 2 : 0;
+        const dy = (isFinite(y0) && isFinite(y1)) ? tgt.y - (y0 + y1) / 2 : 0;
+        // 有界错开：无论粘贴多少次都围绕鼠标位置，只在四个方向小量错开，避免完全重叠且不会越贴越偏
+        const jitCycle = [[0, 0], [18, 0], [18, 18], [0, 18]];
+        const jit = jitCycle[(this._pasteCount - 1) % jitCycle.length];
+        const idMap = new Map();
+        cb.devices.forEach(item => {
+            const d = this.jsonDeep(item.dev);
+            delete d.ifaces;
+            const newId = uuidv4();
+            idMap.set(item.oldId, newId);
+            d.id = newId;
+            d.cx = Math.round(d.cx + dx + jit[0]);
+            d.cy = Math.round(d.cy + dy + jit[1]);
+            d.com_port = String(this.maxComPort() + 1);
+            // 保留原设备名称（含数字后缀），不随剪切/粘贴重新递增加大
+            d.ifaces = this.expandIfaces(d);
+            this.devices.set(newId, d);
+        });
+        cb.lines.forEach(l => {
+            const src = idMap.get(l.srcDeviceID), dst = idMap.get(l.destDeviceID);
+            if (!src || !dst) return;
+            this.lines.push({ srcDeviceID: src, destDeviceID: dst, pairs: this.jsonDeep(l.pairs) });
+        });
+        cb.txttips.forEach(t => {
+            const tip = this.jsonDeep(t);
+            tip.left = Math.round(tip.left + dx + jit[0]);
+            tip.top = Math.round(tip.top + dy + jit[1]);
+            tip.right = Math.round(tip.right + dx + jit[0]);
+            tip.bottom = Math.round(tip.bottom + dy + jit[1]);
+            this.txttips.push(tip);
+        });
+        this.updateNameCounter();
+        const keys = [];
+        idMap.forEach(newId => keys.push('dev:' + newId));
+        for (let i = this.lines.length - cb.lines.length; i < this.lines.length; i++) keys.push('line:' + i);
+        for (let i = this.txttips.length - cb.txttips.length; i < this.txttips.length; i++) keys.push('txt:' + i);
+        const nLines = cb.lines.length, nTxts = cb.txttips.length;
+        this.render();
+        this.selectMultiple(keys);
+        this.updateDirty();
+        this.setStatus('已粘贴 ' + idMap.size + ' 台设备、' + nLines + ' 条链路、' + nTxts + ' 条注释');
+    }
+
+    nextName(prefix) {
+        const n = (this._nameCounts[prefix] || 0) + 1;
+        this._nameCounts[prefix] = n;
+        return prefix + n;
     }
 
     deleteDevice(id) {
@@ -1679,6 +1998,7 @@ class ENSPTopoViewer {
             const t = this.txttips[this.selectedId];
             if (t) { this.layoutTxt(t); const inp = document.getElementById('allTxtFontSize'); if (inp) inp.value = t.fontsize; }
         }
+        else if (this.selKeys.size > 1) this.propertyPanel.innerHTML = '<p class="empty-hint">已选中 ' + this.selKeys.size + ' 个对象' + (this.editMode ? '（Ctrl+C 复制 / Ctrl+X 剪切 / Delete 删除）' : '') + '</p>';
         else this.propertyPanel.innerHTML = '<p class="empty-hint">选择设备 / 链路 / 注释查看详情</p>';
         this.bindPanelEvents();
     }
