@@ -972,6 +972,29 @@ html[data-theme="dark"] .font-size-ctl input:focus {
     filter: url(#glow);
 }
 
+.line-path.multi-sel {
+    stroke: var(--brand-400);
+    stroke-width: 3;
+}
+
+.device-group.multi-sel .device-rect {
+    stroke: var(--brand-400);
+    stroke-width: 2.5;
+}
+
+.txttip-group.multi-sel .txttip-bg {
+    stroke-width: 2.5;
+}
+
+/* 框选矩形 */
+.marquee {
+    fill: rgba(120, 140, 93, 0.12);
+    stroke: #788c5d;
+    stroke-width: 1.2;
+    stroke-dasharray: 5 3;
+    pointer-events: none;
+}
+
 .line-path.is-serial {
     stroke-dasharray: 6 3;
 }
